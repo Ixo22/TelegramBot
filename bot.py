@@ -99,14 +99,14 @@ async def opciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *Modo Inteligente* _(Recomendado)_:\n"
         "Escríbeme directamente el activo que buscas. Entiendo frases como:\n"
         "  -> 'sp500'\n"
-        "  -> 'precio del 100 (nasdaq100)'\n"
         "  -> 'oro'\n\n"
         "🆘 *Comandos de Ayuda*:\n"
         "  -> /start _(ver el mensaje de bienvenida)_\n"
         "  -> /opciones _(ver este menú)_\n"
         "  -> /tickers _(ver lista de activos)_\n"
+        "  -> /alerta <activo> <precio> _(crea una alerta)_\n"
+        "  -> /misalertas _(ver/borrar tus alertas)_\n"
     )
-    # parse_mode="Markdown" permite usar las negritas (**)
     await update.message.reply_text(mensaje_opciones, parse_mode="Markdown")
     
 
@@ -329,69 +329,205 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     
  
-
-async def check_price_alert(context: ContextTypes.DEFAULT_TYPE):
+ 
+ 
+ 
+async def nueva_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Esta es la función que ejecuta el JobQueue.
-    Comprueba alertas hardcodeadas.
+    Crea una nueva alerta.
+    Uso: /alerta <trigger> <precio>
+    Ej: /alerta sp500 650
     """
-    # --- Definición de nuestra alerta de prueba ---
-    TICKER_SIMBOLO = "SXR8.DE"
-    TICKER_ALIAS = "SP500"
-    TARGET_PRICE = 605.00  # <-- ¡CAMBIA ESTO A UN PRECIO REALISTA! (ej: un 5% por debajo del actual)
-    CHAT_ID_AVISO = MI_CHAT_ID # ¡Importado de tu config.py!
-    # -----------------------------------------------
-
-    print(f"JobQueue: Ejecutando check_price_alert para {TICKER_ALIAS}...")
-
-    # 1. Obtenemos el precio actual
-    precio, moneda = obtener_precio_actual(TICKER_SIMBOLO)
+    chat_id = update.message.chat_id
     
-    if precio is None:
-        print(f"JobQueue: No se pudo obtener el precio para {TICKER_ALIAS}. Saltando.")
+    # context.args es la lista de palabras después del comando
+    if len(context.args) != 2:
+        await update.message.reply_text("Formato incorrecto. Uso:\n/alerta <trigger> <precio>\n\nEjemplo: /alerta sp500 650")
         return
 
-    # 2. Lógica de la Alerta (para evitar SPAM)
+    # 1. Procesamos el <trigger> (ej: "sp500")
+    trigger_usuario = context.args[0].lower()
+    ticker_info_encontrada = None
     
-    # Creamos una "llave" única para esta alerta en la memoria del bot
-    alert_key = f"alert_triggered_{TICKER_SIMBOLO}_{TARGET_PRICE}"
-    
-    # Comprobamos si ya nos hemos "disparado"
-    is_already_triggered = context.bot_data.get(alert_key, False)
+    for ticker_data in TICKERS_A_VIGILAR:
+        # Buscamos en el regex de cada ticker si el trigger coincide
+        if re.search(ticker_data["patron_regex"], trigger_usuario):
+            ticker_info_encontrada = ticker_data
+            break
+            
+    if not ticker_info_encontrada:
+        await update.message.reply_text(f"No reconozco el activo '{trigger_usuario}'.\nUsa /tickers para ver la lista.")
+        return
+        
+    # 2. Procesamos el <precio> (ej: "650")
+    try:
+        target_price = float(context.args[1])
+    except ValueError:
+        await update.message.reply_text(f"El precio '{context.args[1]}' no es un número válido.")
+        return
+        
+    # 3. Creamos y guardamos la alerta
+    if "user_alerts" not in context.bot_data:
+        context.bot_data["user_alerts"] = []
 
-    # --- El CEREBRO ---
+    # (Nota: Coge el primer ticker de la lista, ej: SXR8.DE para SP500)
+    ticker_simbolo = ticker_info_encontrada["tickers"][0]["symbol"]
     
-    # A) Si el precio está BAJO el objetivo y la alerta NO se ha disparado...
-    if precio < TARGET_PRICE and not is_already_triggered:
-        print(f"JobQueue: ¡ALERTA DISPARADA! {TICKER_ALIAS} < {TARGET_PRICE}")
-        
-        mensaje = (
-            f"🔔 *¡ALERTA DE PRECIO!* 🔔\n\n"
-            f"El activo *{TICKER_ALIAS}* ha caído por debajo de tu objetivo.\n\n"
-            f"Precio Actual -> {precio:,.2f} {moneda}\n"
-            f"Tu Objetivo     -> {TARGET_PRICE:,.2f} {moneda}"
-        )
-        
-        # ¡Enviamos el mensaje!
-        await context.bot.send_message(chat_id=CHAT_ID_AVISO, text=mensaje, parse_mode="Markdown")
-        
-        # "Armamos" la trampa. No volveremos a avisar.
-        context.bot_data[alert_key] = True
+    nueva_alerta_data = {
+        "ticker": ticker_simbolo,
+        "alias": ticker_info_encontrada["alias_general"],
+        "target": target_price,
+        "chat_id": chat_id, # ¡Alerta personalizada para quien la pide!
+        "triggered": False
+    }
+    
+    context.bot_data["user_alerts"].append(nueva_alerta_data)
+    
+    # 4. Confirmamos
+    mensaje = (
+        f"¡Alerta Creada! ✅\n\n"
+        f"Vigilaré *{nueva_alerta_data['alias']}* y te avisaré si baja de *{target_price:,.2f}*"
+    )
+    await update.message.reply_text(mensaje, parse_mode="Markdown")
 
-    # B) Si el precio se RECUPERA por encima del objetivo y la alerta SÍ estaba disparada...
-    elif precio > TARGET_PRICE and is_already_triggered:
-        print(f"JobQueue: ALERTA RE-ARMADA. {TICKER_ALIAS} > {TARGET_PRICE}")
+
+async def mis_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra las alertas activas del usuario (con tickers) y botones para borrar."""
+    
+    chat_id = update.message.chat_id
+    user_alerts = context.bot_data.get("user_alerts", [])
+    
+    # Filtramos la lista para mostrar solo las de ESTE usuario
+    alertas_de_este_usuario = []
+    for i, alert in enumerate(user_alerts):
+        if alert.get("chat_id") == chat_id:
+            alertas_de_este_usuario.append((i, alert)) # Guardamos (índice_global, alerta)
+    
+    if not alertas_de_este_usuario:
+        await update.message.reply_text("No tienes ninguna alerta activa.\nCrea una con /alerta <trigger> <precio>")
+        return
+
+    keyboard = []
+    partes_del_mensaje = ["Tus Alertas Activas:\n"]
+    
+    for i_global, alert in alertas_de_este_usuario:
+        alias = alert['alias']
+        target = alert['target']
+        ticker = alert['ticker'] # <-- ¡AQUÍ ESTÁ!
         
-        mensaje = (
-            f"✅ *Alerta Reactivada* ✅\n\n"
-            f"El activo *{TICKER_ALIAS}* se ha recuperado por encima de {TARGET_PRICE:,.2f} {moneda}.\n"
-            f"La alerta de precio ha sido reactivada."
+        # --- ¡MODIFICADO! ---
+        # Añadimos el '(ticker)'
+        partes_del_mensaje.append(f"\n-> {alias} ({ticker}) < {target:,.2f}")
+        
+        # Creamos un botón de borrado para CADA alerta
+        boton = InlineKeyboardButton(
+            text=f"Borrar {alias} ({ticker})", # <-- (Lo añado aquí también) 
+            callback_data=f"delete_alert:{i_global}"
         )
+        keyboard.append([boton])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Enviamos en texto plano (sin parse_mode) para evitar errores
+    await update.message.reply_text("".join(partes_del_mensaje), reply_markup=reply_markup)
+
+
+async def borrar_alerta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Se ejecuta cuando el usuario pulsa un botón de "Borrar".
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        prefix, index_str = query.data.split(":")
+        index = int(index_str)
         
-        await context.bot.send_message(chat_id=CHAT_ID_AVISO, text=mensaje, parse_mode="Markdown")
+        # Borramos la alerta de la lista global usando su índice
+        alert_borrada = context.bot_data["user_alerts"].pop(index)
+        alias = alert_borrada["alias"]
         
-        # "Re-armamos" la trampa.
-        context.bot_data[alert_key] = False
+        # Editamos el mensaje original para confirmar
+        await query.edit_message_text(f"Alerta para *{alias}* borrada con éxito.", parse_mode="Markdown")
+        
+    except (ValueError, IndexError, KeyError):
+        await query.edit_message_text("Error al borrar la alerta. Ya no existe o está corrupta.")
+ 
+
+async def check_all_alerts(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Esta es la función que ejecuta el JobQueue.
+    ¡RECORRE TODAS LAS ALERTAS DE TODOS LOS USUARIOS!
+    """
+    
+    # 1. Obtiene la lista de alertas. Si no existe, la crea vacía.
+    if "user_alerts" not in context.bot_data:
+        context.bot_data["user_alerts"] = []
+
+    user_alerts = context.bot_data["user_alerts"]
+    
+    if not user_alerts:
+        print("JobQueue: No hay alertas de usuario que comprobar. Durmiendo.")
+        return
+
+    print(f"JobQueue: Comprobando {len(user_alerts)} alerta(s) de usuario...")
+
+    # Creamos una lista de alertas para eliminar (si dan error)
+    alerts_to_remove = []
+
+    # 2. Recorre cada alerta que los usuarios han creado
+    # Usamos enumerate() para poder borrar por índice si algo falla
+    for i, alert in enumerate(user_alerts):
+        
+        try:
+            ticker_simbolo = alert["ticker"]
+            ticker_alias = alert["alias"]
+            target_price = alert["target"]
+            chat_id_aviso = alert["chat_id"]
+            is_triggered = alert.get("triggered", False)
+
+            # 3. Obtenemos el precio real
+            precio, moneda = obtener_precio_actual(ticker_simbolo)
+            
+            if precio is None:
+                print(f"JobQueue: No se pudo obtener el precio para {ticker_alias}. Saltando.")
+                continue # Pasa a la siguiente alerta del bucle
+
+            # 4. Lógica de la Alerta (¡Tu código, pero con variables!)
+            if precio < target_price and not is_triggered:
+                print(f"JobQueue: ¡ALERTA DISPARADA! {ticker_alias} < {target_price}")
+                
+                mensaje = (
+                    f"🔔 *¡ALERTA DE PRECIO!* 🔔\n\n"
+                    f"El activo *{ticker_alias}* ha caído por debajo de tu objetivo.\n\n"
+                    f"Precio Actual -> {precio:,.2f} {moneda}\n"
+                    f"Tu Objetivo     -> {target_price:,.2f} {moneda}"
+                )
+                
+                await context.bot.send_message(chat_id=chat_id_aviso, text=mensaje, parse_mode="Markdown")
+                alert["triggered"] = True # Actualiza el estado en la lista
+
+            elif precio > target_price and is_triggered:
+                print(f"JobQueue: ALERTA RE-ARMADA. {ticker_alias} > {target_price}")
+                
+                mensaje = (
+                    f"✅ *Alerta Reactivada* ✅\n\n"
+                    f"El activo *{ticker_alias}* se ha recuperado por encima de {target_price:,.2f} {moneda}.\n"
+                    f"La alerta de precio ha sido reactivada."
+                )
+                
+                await context.bot.send_message(chat_id=chat_id_aviso, text=mensaje, parse_mode="Markdown")
+                alert["triggered"] = False # Actualiza el estado
+
+        except Exception as e:
+            print(f"JobQueue: Error procesando alerta {alert}: {e}. Se marcará para borrar.")
+            # Si una alerta está corrupta o falla, la borramos
+            alerts_to_remove.append(i)
+
+    # 5. Limpiamos las alertas que fallaron (si las hubo)
+    # Iteramos a la inversa para no fastidiar los índices
+    for i in sorted(alerts_to_remove, reverse=True):
+        del context.bot_data["user_alerts"][i]
         
     
 
@@ -399,18 +535,16 @@ async def check_price_alert(context: ContextTypes.DEFAULT_TYPE):
 
 # --- 3. El Bucle Principal del Bot ---
 if __name__ == '__main__':
-    # 1. Comprobamos el Token
+    # 1. Comprobaciones de Token (igual que antes)
     if not MI_TOKEN:
         print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
         exit()
-
     if not MI_CHAT_ID:
-        print("!!! ADVERTENCIA: MI_CHAT_ID no está configurado. Las alertas no funcionarán.")
-        # No salimos, pero es un aviso.
+        print("!!! ADVERTENCIA: MI_CHAT_ID no está configurado. (Se usará para alertas hardcodeadas si las hubiera)")
 
     print("MI_TOKEN encontrado. Iniciando servidor y bot...")
 
-    # 2. Iniciamos el servidor FARSANTE (para Koyeb)
+    # 2. Servidor Farsante (igual que antes)
     #web_thread = threading.Thread(target=run_web_server)
     #web_thread.daemon = True
     #web_thread.start()
@@ -424,20 +558,20 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('opciones', opciones))
     application.add_handler(CommandHandler('tickers', tickers))
+    application.add_handler(CommandHandler('alerta', nueva_alerta)) 
+    application.add_handler(CommandHandler('misalertas', mis_alertas)) 
     
     # --- Registra los "OYENTES" ---
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manejar_texto))
     application.add_handler(CallbackQueryHandler(boton_ticker_pulsado, pattern=r'^ticker:'))
     application.add_handler(CallbackQueryHandler(resumen_mercado, pattern=r'^resumen$'))
+    application.add_handler(CallbackQueryHandler(borrar_alerta_callback, pattern=r'^delete_alert:')) 
     
-    # --- ¡NUEVO! Registra el "JobQueue" ---
+    # --- Registra el "JobQueue" ---
     job_queue = application.job_queue
     
-    # Ejecuta la función 'check_price_alert'
-    # 'interval=300' = cada 300 segundos (5 minutos)
-    # 'first=10' = ejecuta el primer check 10 segundos después de arrancar
-    job_queue.run_repeating(check_price_alert, interval=300, first=10)
-    
+    # ¡MODIFICADO! Llama a la nueva función "gestora"
+    job_queue.run_repeating(check_all_alerts, interval=300, first=10) # 300 segundos = 5 min
     
     # --------------------------------------
 
