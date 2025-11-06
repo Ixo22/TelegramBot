@@ -545,9 +545,9 @@ if __name__ == '__main__':
     print("MI_TOKEN encontrado. Iniciando servidor y bot...")
 
     # 2. Servidor Farsante (igual que antes)
-    #web_thread = threading.Thread(target=run_web_server)
-    #web_thread.daemon = True
-    #web_thread.start()
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
     
     print(f"Servidor farsante iniciado en un hilo.")
 
