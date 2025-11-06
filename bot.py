@@ -95,16 +95,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def opciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra un menú de ayuda actualizado"""
     mensaje_opciones = (
-        "**Opciones Disponibles**\n\n"
-        "🤖 **Modo Inteligente** (Recomendado):\n"
+        "*Opciones Disponibles*\n\n"
+        "🤖 *Modo Inteligente* _(Recomendado)_:\n"
         "Escríbeme directamente el activo que buscas. Entiendo frases como:\n"
         "  -> 'sp500'\n"
         "  -> 'precio del 100 (nasdaq100)'\n"
         "  -> 'oro'\n\n"
-        "🆘 **Comandos de Ayuda**:\n"
-        "  -> /start (Ver el mensaje de bienvenida)\n"
-        "  -> /opciones (Ver este menú)\n"
-        "  -> /tickers (Ver lista de activos)\n"
+        "🆘 *Comandos de Ayuda*:\n"
+        "  -> /start _(ver el mensaje de bienvenida)_\n"
+        "  -> /opciones _(ver este menú)_\n"
+        "  -> /tickers _(ver lista de activos)_\n"
     )
     # parse_mode="Markdown" permite usar las negritas (**)
     await update.message.reply_text(mensaje_opciones, parse_mode="Markdown")
@@ -114,7 +114,7 @@ async def opciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra la lista de tickers como botones pulsables."""
     
-    texto_mensaje = "**Tickers disponibles**\n(Pulsa para ver el precio)\n"
+    texto_mensaje = "*Tickers disponibles*\n_(Pulsa para ver el precio)_\n"
     
     # Creamos la lista de filas de botones
     keyboard = []
@@ -338,7 +338,7 @@ async def check_price_alert(context: ContextTypes.DEFAULT_TYPE):
     # --- Definición de nuestra alerta de prueba ---
     TICKER_SIMBOLO = "SXR8.DE"
     TICKER_ALIAS = "SP500"
-    TARGET_PRICE = 675.0  # <-- ¡CAMBIA ESTO A UN PRECIO REALISTA! (ej: un 5% por debajo del actual)
+    TARGET_PRICE = 605.00  # <-- ¡CAMBIA ESTO A UN PRECIO REALISTA! (ej: un 5% por debajo del actual)
     CHAT_ID_AVISO = MI_CHAT_ID # ¡Importado de tu config.py!
     # -----------------------------------------------
 
