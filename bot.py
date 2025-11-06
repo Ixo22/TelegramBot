@@ -15,9 +15,6 @@ from telegram.ext import (
     CallbackQueryHandler 
 )
 
-
-
-
 # --- SERVIDOR FARSANTE PARA KOYEB ---
 app = Flask(__name__)
 
@@ -33,18 +30,12 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 # --------------------------------------
 
-
-
-
-
-
 # --- ¡CONFIGURACIÓN OBLIGATORIA! ---
 MI_TOKEN = os.environ.get("MI_TOKEN")
 MI_CHAT_ID = os.environ.get("MI_CHAT_ID") # (Aunque ya no lo uses, por si acaso)
 
 if not MI_TOKEN:
     print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
-    # Si no hay token, el bot no puede ni arrancar
     exit()
 
 from config import (
@@ -58,15 +49,14 @@ from config import (
     POSIBLES_DE_NADA)
 # ------------------------------------
 
-# Configuramos el logging para ver qué pasa (buena práctica)
+# Configuramos el logging para ver qué pasa 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
 
-
-# --- 1. Lógica del Mercado (Copiada de tracker.py) ---
+# --- 1. Lógica del Mercado  ---
 
 def obtener_precio_actual(ticker_simbolo):
     """
@@ -81,12 +71,11 @@ def obtener_precio_actual(ticker_simbolo):
         precio_actual = info_rapida['last_price']
         moneda = info_rapida['currency']
         
-        # Devuelve los DATOS, no un mensaje
         return precio_actual, moneda 
 
     except Exception as e:
         print(f"*** ERROR al obtener precio para {ticker_simbolo}: {e} ***")
-        return None, None # Devuelve 'Nada' para que el otro lo gestione
+        return None, None 
 
 # --- 2. Lógica de Comandos del Bot ---
 
@@ -167,7 +156,7 @@ async def enviar_resumen_core(reply_object):
     # 1. Avisamos al usuario
     await reply_object.reply_text("Buscando resumen de mercado... ⌛\n(Esto puede tardar unos segundos)")
     
-    partes_del_mensaje = ["**Resumen de Mercado**\n"]
+    partes_del_mensaje = [f"*RESUMEN DEL MERCADO*\n"]
     
     # 2. Bucle anidado MAESTRO (Tu lógica, intacta)
     for ticker_info in TICKERS_A_VIGILAR:
@@ -339,26 +328,96 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Si no es nada, se queda callado. Perfecto.
     
     
+ 
+
+async def check_price_alert(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Esta es la función que ejecuta el JobQueue.
+    Comprueba alertas hardcodeadas.
+    """
+    # --- Definición de nuestra alerta de prueba ---
+    TICKER_SIMBOLO = "SXR8.DE"
+    TICKER_ALIAS = "SP500"
+    TARGET_PRICE = 675.0  # <-- ¡CAMBIA ESTO A UN PRECIO REALISTA! (ej: un 5% por debajo del actual)
+    CHAT_ID_AVISO = MI_CHAT_ID # ¡Importado de tu config.py!
+    # -----------------------------------------------
+
+    print(f"JobQueue: Ejecutando check_price_alert para {TICKER_ALIAS}...")
+
+    # 1. Obtenemos el precio actual
+    precio, moneda = obtener_precio_actual(TICKER_SIMBOLO)
     
+    if precio is None:
+        print(f"JobQueue: No se pudo obtener el precio para {TICKER_ALIAS}. Saltando.")
+        return
+
+    # 2. Lógica de la Alerta (para evitar SPAM)
+    
+    # Creamos una "llave" única para esta alerta en la memoria del bot
+    alert_key = f"alert_triggered_{TICKER_SIMBOLO}_{TARGET_PRICE}"
+    
+    # Comprobamos si ya nos hemos "disparado"
+    is_already_triggered = context.bot_data.get(alert_key, False)
+
+    # --- El CEREBRO ---
+    
+    # A) Si el precio está BAJO el objetivo y la alerta NO se ha disparado...
+    if precio < TARGET_PRICE and not is_already_triggered:
+        print(f"JobQueue: ¡ALERTA DISPARADA! {TICKER_ALIAS} < {TARGET_PRICE}")
+        
+        mensaje = (
+            f"🔔 *¡ALERTA DE PRECIO!* 🔔\n\n"
+            f"El activo *{TICKER_ALIAS}* ha caído por debajo de tu objetivo.\n\n"
+            f"Precio Actual -> {precio:,.2f} {moneda}\n"
+            f"Tu Objetivo     -> {TARGET_PRICE:,.2f} {moneda}"
+        )
+        
+        # ¡Enviamos el mensaje!
+        await context.bot.send_message(chat_id=CHAT_ID_AVISO, text=mensaje, parse_mode="Markdown")
+        
+        # "Armamos" la trampa. No volveremos a avisar.
+        context.bot_data[alert_key] = True
+
+    # B) Si el precio se RECUPERA por encima del objetivo y la alerta SÍ estaba disparada...
+    elif precio > TARGET_PRICE and is_already_triggered:
+        print(f"JobQueue: ALERTA RE-ARMADA. {TICKER_ALIAS} > {TARGET_PRICE}")
+        
+        mensaje = (
+            f"✅ *Alerta Reactivada* ✅\n\n"
+            f"El activo *{TICKER_ALIAS}* se ha recuperado por encima de {TARGET_PRICE:,.2f} {moneda}.\n"
+            f"La alerta de precio ha sido reactivada."
+        )
+        
+        await context.bot.send_message(chat_id=CHAT_ID_AVISO, text=mensaje, parse_mode="Markdown")
+        
+        # "Re-armamos" la trampa.
+        context.bot_data[alert_key] = False
+        
+    
+
+   
 
 # --- 3. El Bucle Principal del Bot ---
 if __name__ == '__main__':
-    # 1. Comprobamos el Token (como antes)
+    # 1. Comprobamos el Token
     if not MI_TOKEN:
         print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
         exit()
 
+    if not MI_CHAT_ID:
+        print("!!! ADVERTENCIA: MI_CHAT_ID no está configurado. Las alertas no funcionarán.")
+        # No salimos, pero es un aviso.
+
     print("MI_TOKEN encontrado. Iniciando servidor y bot...")
 
-    # 2. Iniciamos el servidor FARSANTE en un hilo (thread)
-    #    'daemon=True' significa que si el bot muere, el servidor también.
-    web_thread = threading.Thread(target=run_web_server)
-    web_thread.daemon = True
-    web_thread.start()
+    # 2. Iniciamos el servidor FARSANTE (para Koyeb)
+    #web_thread = threading.Thread(target=run_web_server)
+    #web_thread.daemon = True
+    #web_thread.start()
     
-    print(f"Servidor farsante iniciado en un hilo. (Puerto $PORT)")
+    print(f"Servidor farsante iniciado en un hilo.")
 
-    # 3. Iniciamos el BOT (como siempre)
+    # 3. Iniciamos el BOT
     application = ApplicationBuilder().token(MI_TOKEN).build()
 
     # --- Registra los COMANDOS ---
@@ -371,6 +430,17 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(boton_ticker_pulsado, pattern=r'^ticker:'))
     application.add_handler(CallbackQueryHandler(resumen_mercado, pattern=r'^resumen$'))
     
-    # 4. El bot se queda aquí, en el hilo principal
-    print("Iniciando el polling del bot...")
+    # --- ¡NUEVO! Registra el "JobQueue" ---
+    job_queue = application.job_queue
+    
+    # Ejecuta la función 'check_price_alert'
+    # 'interval=300' = cada 300 segundos (5 minutos)
+    # 'first=10' = ejecuta el primer check 10 segundos después de arrancar
+    job_queue.run_repeating(check_price_alert, interval=300, first=10)
+    
+    
+    # --------------------------------------
+
+    # 4. El bot se queda aquí
+    print("Iniciando el polling del bot y la JobQueue...")
     application.run_polling()
