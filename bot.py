@@ -3,6 +3,8 @@ import logging
 import random
 import re
 import os
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     ApplicationBuilder, 
@@ -12,6 +14,29 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler 
 )
+
+
+
+
+# --- SERVIDOR FARSANTE PARA KOYEB ---
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    """Respuesta 'estoy vivo' para el health check de Koyeb."""
+    return "Bot is alive!"
+
+def run_web_server():
+    """Ejecuta el servidor web en el puerto que Koyeb asigne."""
+    # Koyeb (y otros) nos dice el puerto a usar en la variable $PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+# --------------------------------------
+
+
+
+
+
 
 # --- ¡CONFIGURACIÓN OBLIGATORIA! ---
 MI_TOKEN = os.environ.get("MI_TOKEN")
@@ -317,27 +342,35 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 
 # --- 3. El Bucle Principal del Bot ---
-
 if __name__ == '__main__':
-    # ... (todo lo de 'print' y 'ApplicationBuilder' es igual) ...
-    application = ApplicationBuilder().token(MI_TOKEN).build() # <-- (Espero que con el de config.py)
+    # 1. Comprobamos el Token (como antes)
+    if not MI_TOKEN:
+        print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
+        exit()
+
+    print("MI_TOKEN encontrado. Iniciando servidor y bot...")
+
+    # 2. Iniciamos el servidor FARSANTE en un hilo (thread)
+    #    'daemon=True' significa que si el bot muere, el servidor también.
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
+    
+    print(f"Servidor farsante iniciado en un hilo. (Puerto $PORT)")
+
+    # 3. Iniciamos el BOT (como siempre)
+    application = ApplicationBuilder().token(MI_TOKEN).build()
 
     # --- Registra los COMANDOS ---
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('opciones', opciones))
     application.add_handler(CommandHandler('tickers', tickers))
     
-   # --- Registra los "OYENTES" ---
-    
-    # Oyente de Texto
+    # --- Registra los "OYENTES" ---
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manejar_texto))
-    
-    # ¡AÑADE ESTE! Oyente de Pulsaciones de Botón (Callbacks)
-    # El 'pattern' hace que solo llame a la función si la señal empieza con "ticker:"
     application.add_handler(CallbackQueryHandler(boton_ticker_pulsado, pattern=r'^ticker:'))
-    
-    # ¡AÑADE ESTE! Oyente de Botón "Resumen"
     application.add_handler(CallbackQueryHandler(resumen_mercado, pattern=r'^resumen$'))
     
-    
+    # 4. El bot se queda aquí, en el hilo principal
+    print("Iniciando el polling del bot...")
     application.run_polling()
