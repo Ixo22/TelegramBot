@@ -123,7 +123,8 @@ async def init_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ticker_symbol VARCHAR(20) NOT NULL,
             alias_general VARCHAR(50) NOT NULL,
             target_price NUMERIC(12, 2) NOT NULL,
-            is_triggered BOOLEAN DEFAULT FALSE
+            is_triggered BOOLEAN DEFAULT FALSE,
+            currency VARCHAR(10)
         );
         """
         cursor.execute(create_table_query)
@@ -478,22 +479,30 @@ async def conv_precio_recibido(update: Update, context: ContextTypes.DEFAULT_TYP
         ticker_simbolo = ticker_info["tickers"][0]["symbol"]
         alias_general = ticker_info["alias_general"]
         chat_id = update.message.chat_id
+        
+        # --- ¡NUEVA LLAMADA PARA OBTENER MONEDA! ---
+        # Hacemos una llamada rápida solo para saber la moneda y mejorar el mensaje
+        precio_actual, moneda = obtener_precio_actual(ticker_simbolo)
+        if moneda is None:
+            moneda = "" # Si falla, dejamos la moneda vacía
+        # -------------------------------------------
 
         conn = db_pool.getconn()
         cursor = conn.cursor()
         
         insert_query = """
-        INSERT INTO alerts (chat_id, ticker_symbol, alias_general, target_price)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO alerts (chat_id, ticker_symbol, alias_general, target_price, currency)
+        VALUES (%s, %s, %s, %s, %s)
         """
-        cursor.execute(insert_query, (chat_id, ticker_simbolo, alias_general, target_price))
+        cursor.execute(insert_query, (chat_id, ticker_simbolo, alias_general, target_price, moneda))
         conn.commit()
 
         context.user_data.clear()
 
+        # --- ¡MENSAJE! ---
         mensaje = (
             f"¡Alerta Creada! ✅\n\n"
-            f"Vigilaré *{alias_general}* y te avisaré si baja de *{target_price:,.2f}*DA\n\n"
+            f"Vigilaré *{alias_general}* y te avisaré si baja de *{target_price:,.2f} {moneda}*\n\n" 
             "Puedes verla con /misalertas."
         )
         await update.message.reply_text(mensaje, parse_mode="Markdown")
@@ -612,20 +621,26 @@ async def nueva_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ticker_simbolo = ticker_info_encontrada["tickers"][0]["symbol"]
         alias_general = ticker_info_encontrada["alias_general"]
+        
+        # --- ¡NUEVA LLAMADA PARA OBTENER MONEDA! ---
+        precio_actual, moneda = obtener_precio_actual(ticker_simbolo)
+        if moneda is None:
+            moneda = "N/A"
+        # -------------------------------------------
 
         conn = db_pool.getconn()
         cursor = conn.cursor()
         
         insert_query = """
-        INSERT INTO alerts (chat_id, ticker_symbol, alias_general, target_price)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO alerts (chat_id, ticker_symbol, alias_general, target_price, currency) 
+        VALUES (%s, %s, %s, %s, %s)
         """
-        cursor.execute(insert_query, (chat_id, ticker_simbolo, alias_general, target_price))
+        cursor.execute(insert_query, (chat_id, ticker_simbolo, alias_general, target_price, moneda))
         conn.commit()
         
         mensaje = (
             f"¡Alerta Creada! ✅\n\n"
-            f"Vigilaré *{alias_general}* y te avisaré si baja de *{target_price:,.2f}*"
+            f"Vigilaré *{alias_general}* y te avisaré si baja de *{target_price:,.2f}* {moneda}"
         )
         await update.message.reply_text(mensaje, parse_mode="Markdown")
 
@@ -645,7 +660,7 @@ async def mis_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = db_pool.getconn()
         cursor = conn.cursor()
 
-        select_query = "SELECT id, alias_general, ticker_symbol, target_price FROM alerts WHERE chat_id = %s"
+        select_query = "SELECT id, alias_general, ticker_symbol, target_price, currency FROM alerts WHERE chat_id = %s"
         cursor.execute(select_query, (chat_id,))
         
         alertas_de_este_usuario = cursor.fetchall()
@@ -658,10 +673,13 @@ async def mis_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         partes_del_mensaje = ["Tus Alertas Activas:\n"]
         
         for alert in alertas_de_este_usuario:
-            alert_id, alias, ticker, target_price = alert
+            alert_id, alias, ticker, target_price, currency = alert
             target_price = float(target_price) # Convertir de Decimal
             
-            partes_del_mensaje.append(f"\n-> {alias} ({ticker}) < {target_price:,.2f}")
+            if currency is None or currency == "N/A":
+                currency = "" # No mostramos nada si no la sabemos
+            
+            partes_del_mensaje.append(f"\n-> {alias} ({ticker}) < {target_price:,.2f} {currency}")
             
             boton = InlineKeyboardButton(
                 text=f"Borrar {alias} ({ticker})", 
