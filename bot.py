@@ -12,8 +12,12 @@ from telegram.ext import (
     CommandHandler, 
     MessageHandler,  
     filters,
-    CallbackQueryHandler 
+    CallbackQueryHandler,
+    ConversationHandler
 )
+
+# Estados de la conversación
+STATE_CHOOSE_TICKER, STATE_SET_PRICE = range(2)
 
 # --- SERVIDOR FARSANTE PARA KOYEB ---
 app = Flask(__name__)
@@ -46,7 +50,8 @@ from config import (
     PATRON_OPCIONES,
     PATRON_TODO,
     POSIBLES_SALUDOS,
-    POSIBLES_DE_NADA)
+    POSIBLES_DE_NADA,
+    PATRON_MIS_ALERTAS)
 # ------------------------------------
 
 # Configuramos el logging para ver qué pasa 
@@ -105,6 +110,7 @@ async def opciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  -> /opciones _(ver este menú)_\n"
         "  -> /tickers _(ver lista de activos)_\n"
         "  -> /alerta <activo> <precio> _(crea una alerta)_\n"
+        "  -> /alerta _(inicia el asistente interactivo)_\n"
         "  -> /misalertas _(ver/borrar tus alertas)_\n"
     )
     await update.message.reply_text(mensaje_opciones, parse_mode="Markdown")
@@ -313,6 +319,9 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Reutilizamos la función del comando /tickers
             await tickers(update, context) 
             
+        elif re.search(PATRON_MIS_ALERTAS, texto_recibido):
+            await mis_alertas(update, context)
+            
         # 2. Intenciones de "CHARLA" (secundarias)
         elif re.search(PATRON_SALUDO, texto_recibido): 
             saludo_elegido = random.choice(POSIBLES_SALUDOS)
@@ -389,6 +398,123 @@ async def nueva_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Vigilaré *{nueva_alerta_data['alias']}* y te avisaré si baja de *{target_price:,.2f}*"
     )
     await update.message.reply_text(mensaje, parse_mode="Markdown")
+    
+    
+    
+    
+# (Pega esto donde estaba la antigua 'nueva_alerta')
+
+async def conv_start_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Paso 1: Inicia la conversación O ejecuta el modo rápido.
+    Comprueba si el usuario ha añadido argumentos.
+    """
+    
+    # --- MODO EXPERTO ---
+    if context.args:
+        # Si el usuario ha escrito /alerta sp500 650
+        if len(context.args) == 2:
+            # Llamamos a la lógica antigua (one-shot)
+            await nueva_alerta(update, context) 
+            return ConversationHandler.END # Y matamos la conversación
+        else:
+            # Error, mal formato
+            await update.message.reply_text("Formato incorrecto. Uso: /alerta <trigger> <precio>\nO simplemente /alerta para el asistente.")
+            return ConversationHandler.END
+
+    # --- MODO NOVATO ---
+    # Si el usuario solo ha escrito /alerta (sin args)
+    await update.message.reply_text("¡Genial! Vamos a crear una alerta.")
+    
+    # Reutilizamos la función de /tickers para mostrar los botones
+    await tickers(update, context) 
+    
+    await update.message.reply_text("¿Sobre qué activo? (Pulsa un botón de la lista de arriba)\nO escribe /cancelar para salir.")
+    
+    # Le decimos al ConversationHandler que pasamos al estado "elegir ticker"
+    return STATE_CHOOSE_TICKER
+
+
+async def conv_ticker_elegido(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Paso 2: El usuario ha pulsado un botón de Ticker.
+    Guarda el ticker y pregunta por el precio.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # 1. Extraemos el ticker del botón pulsado
+    try:
+        prefix, index_str = query.data.split(":")
+        index = int(index_str)
+        ticker_info = TICKERS_A_VIGILAR[index]
+        
+        # 2. Guardamos los datos en la "memoria a corto plazo"
+        context.user_data["alerta_ticker_info"] = ticker_info
+        
+    except (ValueError, IndexError, KeyError):
+        await query.message.reply_text("Error: No he reconocido ese botón. /cancelar para empezar de nuevo.")
+        return ConversationHandler.END # Error, matamos la convo
+
+    # 3. Preguntamos por el precio
+    alias = ticker_info["alias_general"]
+    await query.message.reply_text(f"¡OK! Vigilaré *{alias}*.\n\n¿Por debajo de qué precio te aviso?\n(Escribe solo el número, ej: 650)", parse_mode="Markdown")
+
+    # Pasamos al estado "poner precio"
+    return STATE_SET_PRICE
+
+
+async def conv_precio_recibido(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Paso 3: El usuario ha escrito un precio.
+    Guarda la alerta y termina la conversación.
+    """
+    # 1. Recuperamos el ticker de la "memoria a corto plazo"
+    try:
+        ticker_info = context.user_data["alerta_ticker_info"]
+    except KeyError:
+        await update.message.reply_text("¡Ups! Me he perdido. Empecemos de nuevo con /alerta.")
+        return ConversationHandler.END
+
+    # 2. Validamos el precio
+    try:
+        target_price = float(update.message.text)
+    except ValueError:
+        await update.message.reply_text(f"'{update.message.text}' no es un número válido.\n\nEscribe solo el número (ej: 650) o /cancelar.")
+        return STATE_SET_PRICE # Nos quedamos en este paso
+
+    # 3. ¡TENEMOS TODO! Creamos y guardamos la alerta (en la "memoria a largo plazo")
+    if "user_alerts" not in context.bot_data:
+        context.bot_data["user_alerts"] = []
+
+    nueva_alerta_data = {
+        "ticker": ticker_info["tickers"][0]["symbol"],
+        "alias": ticker_info["alias_general"],
+        "target": target_price,
+        "chat_id": update.message.chat_id,
+        "triggered": False
+    }
+    context.bot_data["user_alerts"].append(nueva_alerta_data)
+    
+    # 4. Limpiamos la memoria a corto plazo
+    context.user_data.clear()
+
+    # 5. Confirmamos y terminamos
+    mensaje = (
+        f"¡Alerta Creada! ✅\n\n"
+        f"Vigilaré *{nueva_alerta_data['alias']}* y te avisaré si baja de *{target_price:,.2f}*\n\n"
+        "Puedes verla con /misalertas."
+    )
+    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    
+    return ConversationHandler.END
+
+
+async def conv_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancela y sale de la conversación."""
+    context.user_data.clear()
+    await update.message.reply_text("Creación de alerta cancelada.")
+    return ConversationHandler.END
 
 
 async def mis_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -535,16 +661,14 @@ async def check_all_alerts(context: ContextTypes.DEFAULT_TYPE):
 
 # --- 3. El Bucle Principal del Bot ---
 if __name__ == '__main__':
-    # 1. Comprobaciones de Token (igual que antes)
+    # ... (Comprobaciones de TOKEN y CHAT_ID, y el hilo de Flask... todo eso igual)
     if not MI_TOKEN:
         print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
         exit()
-    if not MI_CHAT_ID:
-        print("!!! ADVERTENCIA: MI_CHAT_ID no está configurado. (Se usará para alertas hardcodeadas si las hubiera)")
-
-    print("MI_TOKEN encontrado. Iniciando servidor y bot...")
-
-    # 2. Servidor Farsante (igual que antes)
+    # ... (etc)
+    
+    print("Iniciando el polling del bot y la JobQueue...")
+    
     web_thread = threading.Thread(target=run_web_server)
     web_thread.daemon = True
     web_thread.start()
@@ -554,27 +678,47 @@ if __name__ == '__main__':
     # 3. Iniciamos el BOT
     application = ApplicationBuilder().token(MI_TOKEN).build()
 
-    # --- Registra los COMANDOS ---
+    # --- ¡EL NUEVO ORDEN! ---
+    
+    # 3.1. Definimos el ConversationHandler
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('alerta', conv_start_alerta)],
+        states={
+            STATE_CHOOSE_TICKER: [
+                # El bot espera ÚNICAMENTE un botón que empiece por "ticker:"
+                CallbackQueryHandler(conv_ticker_elegido, pattern=r'^ticker:')
+            ],
+            STATE_SET_PRICE: [
+                # El bot espera ÚNICAMENTE un mensaje de texto
+                MessageHandler(filters.TEXT & (~filters.COMMAND), conv_precio_recibido)
+            ],
+        },
+        fallbacks=[
+            CommandHandler('cancelar', conv_cancelar)
+        ],
+    )
+    
+    # 3.2. Registramos el ConversationHandler (¡el primero!)
+    application.add_handler(conv_handler)
+    
+    # 3.3. Registramos el RESTO de handlers (los que ya tenías)
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('opciones', opciones))
     application.add_handler(CommandHandler('tickers', tickers))
-    application.add_handler(CommandHandler('alerta', nueva_alerta)) 
-    application.add_handler(CommandHandler('misalertas', mis_alertas)) 
+    application.add_handler(CommandHandler('misalertas', mis_alertas))
     
     # --- Registra los "OYENTES" ---
+    # (¡Ojo! Estos botones fallarán si se pulsan DENTRO de la conversación)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), manejar_texto))
     application.add_handler(CallbackQueryHandler(boton_ticker_pulsado, pattern=r'^ticker:'))
     application.add_handler(CallbackQueryHandler(resumen_mercado, pattern=r'^resumen$'))
-    application.add_handler(CallbackQueryHandler(borrar_alerta_callback, pattern=r'^delete_alert:')) 
+    application.add_handler(CallbackQueryHandler(borrar_alerta_callback, pattern=r'^delete_alert:'))
     
     # --- Registra el "JobQueue" ---
     job_queue = application.job_queue
+    job_queue.run_repeating(check_all_alerts, interval=300, first=10) # 5 min
     
-    # ¡MODIFICADO! Llama a la nueva función "gestora"
-    job_queue.run_repeating(check_all_alerts, interval=300, first=10) # 300 segundos = 5 min
-    
-    # --------------------------------------
-
     # 4. El bot se queda aquí
     print("Iniciando el polling del bot y la JobQueue...")
     application.run_polling()
+    
