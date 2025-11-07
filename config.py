@@ -1,3 +1,5 @@
+
+
 # --- ¡CONSTANTES GLOBALES DEL BOT! ---
 TICKERS_A_VIGILAR = [
     {
@@ -38,9 +40,10 @@ TICKERS_A_VIGILAR = [
 
 PATRON_SALUDO = r'hola|buenos dias|buenas|saludos|hey|klk|holi|holaa|hoola|hey'
 PATRON_GRACIAS = r'gracias|thx|thanks|ty|maquina|fiera|crack|mastodonte|titan|genio'
-PATRON_TICKERS = r'tickers|lista|activos|que tienes'
+PATRON_TICKERS = r'tickers|lista|activos|que tienes|lst'
 PATRON_OPCIONES = r'opciones|ayuda|comandos|menu|que haces|opc'
 PATRON_TODO = r'todo|resumen|mercado|completo|general|global'
+PATRON_MIS_ALERTAS = r'\b(mis alertas|alertas|ver alertas|dime mis alertas)\b'
 
 
 # RESPUESTAS POSIBLES
