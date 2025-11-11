@@ -38,10 +38,12 @@ def run_web_server():
 # --------------------------------------
 
 
+
 # --- ¡CONFIGURACIÓN OBLIGATORIA! ---
 MI_TOKEN = os.environ.get("MI_TOKEN")
 MI_CHAT_ID = os.environ.get("MI_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
 
 if not MI_TOKEN:
     print("!!! ERROR CRÍTICO: No se encontró la variable de entorno MI_TOKEN !!!")
@@ -87,8 +89,8 @@ logging.basicConfig(
 
 def obtener_precio_actual(ticker_simbolo):
     """
-    Obtiene el último precio del ticker.
-    Devuelve (precio_actual, moneda) o (None, None) si falla.
+    Obtiene el último precio del ticker Y EL CAMBIO DIARIO.
+    Devuelve (precio_actual, moneda, percent_change) o (None, None, None).
     """
     print(f"Buscando datos de [{ticker_simbolo}]...")
     try:
@@ -98,11 +100,20 @@ def obtener_precio_actual(ticker_simbolo):
         precio_actual = info_rapida['last_price']
         moneda = info_rapida['currency']
         
-        return precio_actual, moneda 
+        # --- ¡NUEVA LÓGICA! ---
+        precio_anterior = info_rapida.get('previousClose')
+        percent_change = None
+        
+        if precio_anterior and precio_actual:
+            # Calculamos el % de cambio
+            percent_change = ((precio_actual - precio_anterior) / precio_anterior) * 100
+        # ----------------------
+            
+        return precio_actual, moneda, percent_change 
 
     except Exception as e:
         print(f"*** ERROR al obtener precio para {ticker_simbolo}: {e} ***")
-        return None, None 
+        return None, None, None
 
 # --- 2. Lógica de Comandos del Bot ---
 async def init_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,10 +244,11 @@ async def enviar_resumen_core(reply_object):
             nombre_ticker = ticker_a_buscar["nombre"]
             symbol_ticker = ticker_a_buscar["symbol"]
             
-            precio, moneda = obtener_precio_actual(symbol_ticker)
+            precio, moneda, p_change = obtener_precio_actual(symbol_ticker)
+            change_str = f"({p_change:+,.2f}%)" if p_change is not None else ""
             
             if precio is not None:
-                linea = f"  -> {nombre_ticker}: {precio:,.2f} {moneda}\n"
+                linea = f"  -> {nombre_ticker}: {precio:,.2f} {moneda} {change_str}\n"
                 partes_del_mensaje.append(linea)
             else:
                 linea = f"  -> {nombre_ticker} [{symbol_ticker}]: Error.\n"
@@ -298,10 +310,11 @@ async def boton_ticker_pulsado(update: Update, context: ContextTypes.DEFAULT_TYP
         nombre_ticker = ticker_a_buscar["nombre"]
         symbol_ticker = ticker_a_buscar["symbol"]
         
-        precio, moneda = obtener_precio_actual(symbol_ticker)
+        precio, moneda, p_change = obtener_precio_actual(symbol_ticker)
+        change_str = f"({p_change:+,.2f}%)" if p_change is not None else ""
         
         if precio is not None:
-            linea = f"  -> Precio de {alias_general} ({nombre_ticker}): {precio:,.2f} {moneda}\n"
+            linea = f"  -> Precio de {alias_general} ({nombre_ticker}): {precio:,.2f} {moneda} {change_str}\n"
             partes_del_mensaje.append(linea)
         else:
             linea = f"  -> {nombre_ticker} [{symbol_ticker}]: Error al obtener.\n"
@@ -344,11 +357,12 @@ async def manejar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 symbol_ticker = ticker_a_buscar["symbol"]
                 
                 # Llamamos a la función PURIFICADA por cada ticker
-                precio, moneda = obtener_precio_actual(symbol_ticker)
+                precio, moneda, p_change = obtener_precio_actual(symbol_ticker)
+                change_str = f"({p_change:+,.2f}%)" if p_change is not None else ""
                 
                 # Construimos la línea para este ticker
                 if precio is not None:
-                    linea = f"  -> Precio de {alias_general} ({nombre_ticker}): {precio:,.2f} {moneda}\n"
+                    linea = f"  -> Precio de {alias_general} ({nombre_ticker}): {precio:,.2f} {moneda} {change_str}\n"
                     partes_del_mensaje.append(linea)
                 else:
                     linea = f"  -> {nombre_ticker} [{symbol_ticker}]: Error al obtener.\n"
@@ -482,7 +496,7 @@ async def conv_precio_recibido(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # --- ¡NUEVA LLAMADA PARA OBTENER MONEDA! ---
         # Hacemos una llamada rápida solo para saber la moneda y mejorar el mensaje
-        precio_actual, moneda = obtener_precio_actual(ticker_simbolo)
+        precio_actual, moneda, _ = obtener_precio_actual(ticker_simbolo)
         if moneda is None:
             moneda = "" # Si falla, dejamos la moneda vacía
         # -------------------------------------------
@@ -550,16 +564,19 @@ async def check_all_alerts(context: ContextTypes.DEFAULT_TYPE):
             # target_price es un objeto Decimal, lo pasamos a float
             target_price = float(target_price)
 
-            precio, moneda = obtener_precio_actual(ticker_simbolo)
+            precio, moneda, p_change = obtener_precio_actual(ticker_simbolo)
             if precio is None:
                 continue
 
             if precio < target_price and not is_triggered:
+                # 2. Formateamos el % de cambio (si existe)
+                change_str = f"({p_change:+,.2f}%)" if p_change is not None else ""
+                
                 print(f"JobQueue: ¡ALERTA DISPARADA! {ticker_alias} < {target_price}")
                 mensaje = (
                     f"🔔 *¡ALERTA DE PRECIO!* 🔔\n\n"
                     f"El activo *{ticker_alias}* ha caído por debajo de tu objetivo.\n\n"
-                    f"Precio Actual -> {precio:,.2f} {moneda}\n"
+                    f"Precio Actual -> {precio:,.2f} {moneda} {change_str}\n"
                     f"Tu Objetivo     -> {target_price:,.2f} {moneda}"
                 )
                 await context.bot.send_message(chat_id=chat_id_aviso, text=mensaje, parse_mode="Markdown")
@@ -623,7 +640,7 @@ async def nueva_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE):
         alias_general = ticker_info_encontrada["alias_general"]
         
         # --- ¡NUEVA LLAMADA PARA OBTENER MONEDA! ---
-        precio_actual, moneda = obtener_precio_actual(ticker_simbolo)
+        precio_actual, moneda, _ = obtener_precio_actual(ticker_simbolo)
         if moneda is None:
             moneda = "N/A"
         # -------------------------------------------
