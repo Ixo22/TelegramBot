@@ -40,7 +40,7 @@ TICKERS_A_VIGILAR = [
     },
     {
         "alias_general": "Mercados Emergentes",
-        "patron_regex": r'\b(emergentes|emerging|markets|mercados|em|)\b',
+        "patron_regex": r'\b(emergentes|emerging|markets|mercados|em)\b',
         "tickers": [
             {"nombre": "ETF", "symbol": "XMME.DE"}
         ]
