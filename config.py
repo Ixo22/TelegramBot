@@ -31,6 +31,27 @@ TICKERS_A_VIGILAR = [
             {"nombre": "COIN", "symbol": "BTC-USD"}
         ]
     },
+    {
+        "alias_general": "Uranio",
+        "patron_regex": r'\b(uranio|ur|uranium|ura)\b',
+        "tickers": [
+            {"nombre": "ETF", "symbol": "NUKL.DE"}
+        ]
+    },
+    {
+        "alias_general": "Mercados Emergentes",
+        "patron_regex": r'\b(emergentes|emerging|markets|mercados|em|)\b',
+        "tickers": [
+            {"nombre": "ETF", "symbol": "XMME.DE"}
+        ]
+    },
+    {
+        "alias_general": "MSCI Pacific ex-Japan",
+        "patron_regex": r'\b(pacific|mscip)\b',
+        "tickers": [
+            {"nombre": "ETF", "symbol": "SXR1.DE"}
+        ]
+    },
 ]
 
 
